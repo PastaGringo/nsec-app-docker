@@ -1,0 +1,97 @@
+version: '3.8'
+services:
+
+  traefik:
+    image: "traefik:latest"
+    container_name: "traefik"
+    restart: unless-stopped
+    command:
+      - "--accesslog=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.selfhostedservices.acme.tlschallenge=true"
+      - "--certificatesresolvers.selfhostedservices.acme.email=${EMAIL}"
+      - "--certificatesresolvers.selfhostedservices.acme.storage=/letsencrypt/acme.json"
+      - "--api.insecure=true"
+      - "--api.dashboard=true"
+      - "--providers.docker"
+      - "--log.level=INFO"
+    ports:
+      - target: 80
+        published: 80
+        mode: host
+      - target: 443
+        published: 443
+        mode: host
+      - target: 8080
+        published: 8080
+        mode: host
+    volumes:
+      - "./letsencrypt:/letsencrypt"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+
+  strfry:
+    container_name: strfry
+    image: pluja/strfry:latest
+    volumes:
+      - ./strfry/strfry.conf:/etc/strfry.conf
+      - ./strfry/strfry-db:/app/strfry-db
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.strfry.rule=Host(`${RELAY_DOMAIN}`)"
+      - "traefik.http.services.strfry.loadbalancer.server.port=7777"
+      - "traefik.http.routers.strfry.entrypoints=websecure"
+      - "traefik.http.routers.strfry.tls.certresolver=selfhostedservices"
+      - "traefik.http.middlewares.accesscontrol.headers.customResponseHeaders.access-control-allow-origin=*"
+      - "traefik.http.routers.strfry.middlewares=accesscontrol@docker"
+
+  noauth:
+    container_name: noauth
+    build:
+      context: ./noauth
+      args:
+        - REACT_APP_WEB_PUSH_PUBKEY=${APP_WEB_PUSH_PUBKEY}
+        - REACT_APP_NOAUTHD_URL=${APP_NOAUTHD_URL}
+        - REACT_APP_DOMAIN=${APP_DOMAIN}
+        - REACT_APP_RELAY=${APP_RELAY}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.noauth.rule=Host(`${NOAUTH_DOMAIN}`)"
+      - "traefik.http.services.noauth.loadbalancer.server.port=3210"
+      - "traefik.http.routers.noauth.entrypoints=websecure"
+      - "traefik.http.routers.noauth.tls.certresolver=selfhostedservices"
+      - "traefik.http.middlewares.accesscontrol.headers.customResponseHeaders.access-control-allow-origin=*"
+      - "traefik.http.routers.noauth.middlewares=accesscontrol@docker"
+
+  noauthd:
+    container_name: noauthd
+    image: pastagringo/noauthd:latest
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.noauthd.rule=Host(`${NOAUTHD_DOMAIN}`) || Host(`${NSEC_ROOT_DOMAIN}`) && PathPrefix(`/.well-known`)"
+      - "traefik.http.services.noauthd.loadbalancer.server.port=8000"
+      - "traefik.http.routers.noauthd.entrypoints=websecure"
+      - "traefik.http.routers.noauthd.tls.certresolver=selfhostedservices"
+      - "traefik.http.middlewares.accesscontrol.headers.customResponseHeaders.access-control-allow-origin=*"
+      - "traefik.http.routers.noauthd.middlewares=accesscontrol@docker"
+
+  easy-nip5:
+    image: nginx:alpine
+    container_name: easy-nip5
+    restart: unless-stopped
+    volumes:
+      - ./easy-nip5/nginx.conf:/etc/nginx/conf.d/nostr.conf
+      - ./easy-nip5/nostr.json:/usr/share/nginx/html/.well-known/nostr.json
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.well-known.rule=Host(`${NSEC_ROOT_DOMAIN}`)"
+      - "traefik.http.services.well-known.loadbalancer.server.port=80"
+      - "traefik.http.routers.well-known.entrypoints=websecure"
+      - "traefik.http.routers.well-known.tls.certresolver=selfhostedservices"
+      - "traefik.http.middlewares.accesscontrol.headers.customResponseHeaders.access-control-allow-origin=*"
+      - "traefik.http.routers.well-known.middlewares=accesscontrol@docker"
